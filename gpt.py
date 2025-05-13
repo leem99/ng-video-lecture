@@ -69,6 +69,7 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
+        # buffers are contants that not updated
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
         self.dropout = nn.Dropout(dropout)
@@ -81,6 +82,8 @@ class Head(nn.Module):
         q = self.query(x) # (B,T,hs)
         # compute attention scores ("affinities")
         wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
+
+        # decoder because the future does not communicate with the past
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
         wei = self.dropout(wei)
@@ -105,13 +108,14 @@ class MultiHeadAttention(nn.Module):
 
 class FeedFoward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
+    # This allow our tokens to "think" after they have communicated with each other
 
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),
+            nn.Linear(4 * n_embd, n_embd), # projection layer back into residual pathway
             nn.Dropout(dropout),
         )
 
@@ -127,10 +131,16 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedFoward(n_embd)
+
+        # noramlize rows to have unit norm
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
+
+        # x = x + stuff, to create skip/residual connections
+        # unlike the original paper, we do layer norm before the residual connection
+        # this is called pre-layernorm, and is the default in most implementations
         x = x + self.sa(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
@@ -222,4 +232,4 @@ for iter in range(max_iters):
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
-#open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
